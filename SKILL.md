@@ -8,17 +8,20 @@ user-invocable: true
 # FlagYard Watcher
 
 Polls a FlagYard event/lab's challenge list and spawns one autonomous T3 Code
-thread per new (unsolved) challenge — login, download, solve, submit, all
-unattended.
+thread per new (unsolved) challenge — download, solve, and report a writeup to
+Telegram, all unattended. Threads do **not** submit flags (a human submits from
+the real competition team).
 
 ## Dependencies
 
 - **[flagyard-submit](https://github.com/RusiruSadathana/flagyard-submit)**
   skill installed at `~/.claude/skills/flagyard-submit/` — provides
-  `flagyard_lib.py` (Cloudflare-safe HTTP + auth + Telegram reporting) and the
-  `get_attachment.py` / `instance.py` / `submit_flag.py` commands referenced
-  in each solver thread's prompt. This repo does not duplicate any of that —
-  it imports `flagyard_lib` directly from the sibling skill's `scripts/` dir.
+  `flagyard_lib.py` (Cloudflare-safe HTTP + auth + Telegram reporting), the
+  `get_attachment.py` / `instance.py` commands referenced in each solver
+  thread's prompt, `telegram.py send-doc` (writeup upload), and the named
+  `--account <name>` support the account pool leases against.
+  This repo does not duplicate any of that — it imports `flagyard_lib` directly
+  from the sibling skill's `scripts/` dir and shells out to its scripts.
   Its `curl_cffi` dependency must be installed on whatever Python interpreter
   runs `flagyard_watcher.py` (a venv, or `uv run --with curl_cffi`).
 - **t3-manage** skill installed (spawns/monitors the T3 Code threads).
@@ -41,14 +44,57 @@ python3 scripts/flagyard_watcher.py --event-id <uuid> --once --dry-run
 `--url "https://flagyard.com/dashboard/events/<uuid>/challenges"` works in
 place of `--event-id`; `--lab-id <id>` targets a practice lab instead.
 
+## Multi-account pool (parallel instances)
+
+FlagYard allows **one running dynamic instance per account** — starting an
+instance on an account kills that account's previous one. To solve several
+instance-backed challenges at once, the watcher keeps a **pool of accounts**
+(separate teams/users) and **leases a distinct account to each solver thread**.
+Lease state is handled by `scripts/accounts.py`; each account is a flagyard-submit
+*named account* (`~/.config/flagyard/accounts/<label>/`), and every FlagYard
+command in a thread's prompt is pinned to it via the skill's `--account <label>`
+flag — one clean seam between the skill and this watcher.
+
+**Prerequisite:** each pool account/team must be **registered/joined to the
+event** (so it can see challenges and start instances). Seed each one from its
+browser's Keycloak token JSON (same source as `flagyard-submit`'s `auth.py`):
+
+```bash
+# Seed accounts (paste the token JSON — access_token + refresh_token — on stdin)
+pbpaste | python3 scripts/accounts.py add --label web1 --team "Team A"
+pbpaste | python3 scripts/accounts.py add --label web2 --team "Team B"
+python3 scripts/accounts.py list           # pool + lease state + token expiries
+python3 scripts/accounts.py refresh-all     # keep every access token warm (cron-friendly)
+```
+
+Once ≥1 account is seeded, the watcher **auto-enables** multi-account mode:
+leases one per thread, **defers** a challenge (retries next poll) when the pool
+is exhausted, and **releases** an account when its thread finishes (polled via
+`t3-manage status`). Force the old single shared account with `--single-account`.
+
+> **Pool vs. `instance_queue.py`:** the pool gives each thread its *own* account
+> (best when you have ~1 account per concurrent instance challenge). The
+> [instance queue](#instance-based-challenges-one-slot-per-flagyard-account) is
+> the complementary fallback — time-share *one* account's single instance slot
+> across several already-spawned threads when you have fewer accounts than
+> instance-based challenges.
+
+## Reporting: writeup-only (no auto-submit)
+
+Solver threads **no longer submit flags**. They solve, write a Markdown writeup
+(`writeup.md`: approach, steps, exploit/payload, and the flag), and **send it to
+Telegram as a document** via `telegram.py send-doc`. A human submits the flag
+from the real competition team. This keeps the worker accounts purely for
+running instances / downloads and never touches the scoreboard.
+
 ## What each spawned thread gets
 
 - Challenge title, category, points, id, full (HTML-stripped) description
 - The `get_attachment.py` download command, if the challenge has files
-- The `instance.py start`/`status` commands, if it's a dynamic instance
-- The `submit_flag.py` command to submit its answer — which itself reports
-  the result (correct, or all attempts exhausted) to Telegram automatically,
-  see flagyard-submit's `telegram.py`
+- The `instance.py start`/`status`/`stop` commands, if it's a dynamic instance
+- Its **dedicated account** pinned via `--account <label>` (multi-account mode)
+- Instructions to solve, write `writeup.md`, and **send it to Telegram as a
+  document** (`telegram.py send-doc`) — **not** to submit the flag
 - Instructions to work autonomously, never spend points on hints, and try
   multiple approaches
 
@@ -64,6 +110,7 @@ place of `--event-id`; `--lab-id <id>` targets a practice lab instead.
 | `--seen-file` | `./seen_challenges_flagyard.txt` | Dedup tracking file |
 | `--dry-run` | false | Show what would spawn, without dispatching |
 | `--no-telegram` | false | Don't report new-challenge/spawn events to Telegram |
+| `--single-account` | false | Force the single shared account (disable the multi-account pool) |
 
 ## Caution
 
