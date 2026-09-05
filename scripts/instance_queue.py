@@ -150,7 +150,10 @@ def run_turn(entry, target_flag_args, t3_manage, instance, model, account,
     label, thread_id, cid = entry["label"], entry["thread_id"], entry["challenge_id"]
     log(label, f"ACTIVE (thread {thread_id[:8]}, challenge {cid[:8]}, account={account or 'default'})")
 
-    if not already_active:
+    already_running = thread_status(t3_manage, thread_id) in ("running", "starting")
+    if already_running:
+        log(label, "already running on its own — skipping resume message.")
+    if not already_active and not already_running:
         msg = (
             f"It's your turn now — you have EXCLUSIVE use of the "
             f"{('account ' + account) if account else 'default account'}'s instance slot for "
