@@ -197,6 +197,7 @@ def poll_once(kind, container, token, project, instance, model, t3_manage, seen,
     ]
 
     spawned = 0
+    newly_handled = set()
     if new_challenges:
         log(f"{len(new_challenges)} NEW challenge(s) detected!")
         for c in new_challenges:
@@ -209,20 +210,27 @@ def poll_once(kind, container, token, project, instance, model, t3_manage, seen,
                 detail_path = f"{lib.container_path(kind, container)}/challenges/{cid}"
                 dstatus, dbody = lib.api_json("GET", detail_path, token)
                 if dstatus != 200:
-                    log(f"  [ERROR] #{cid}: HTTP {dstatus}: {lib.envelope_message(dbody)}")
+                    log(f"  [ERROR] #{cid}: HTTP {dstatus}: {lib.envelope_message(dbody)} — will retry next poll")
                     continue
                 detail = lib.unwrap(dbody)
                 if spawn_thread(kind, container, detail, project, instance, model, t3_manage, dry_run):
                     spawned += 1
+                    newly_handled.add(cid)
                     if report_telegram and not dry_run:
                         lib.notify_telegram_safe(
                             f"🆕 <b>New challenge</b>: {title} ({cat}, {pts}pts)\n"
                             f"Solver thread spawned ({kind[:-1]} {container} / challenge {cid})."
                         )
+                else:
+                    log(f"  [ERROR] #{cid}: spawn failed — will retry next poll")
             except Exception as exc:
-                log(f"  [ERROR] #{cid}: {exc}")
+                log(f"  [ERROR] #{cid}: {exc} — will retry next poll")
 
-    seen = seen | all_ids
+    # Only challenges that are solved or successfully spawned get marked
+    # "seen" — anything that failed (detail fetch, spawn) stays unseen so
+    # the next poll retries it instead of silently dropping it forever.
+    solved_ids = {str(challenge_field(c, "id")) for c in rows if lib.is_solved(c)}
+    seen = seen | solved_ids | newly_handled
     return seen, spawned
 
 
