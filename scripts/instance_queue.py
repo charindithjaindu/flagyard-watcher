@@ -164,7 +164,13 @@ def run_turn(entry, target_flag_args, t3_manage, instance, model, account,
         if not r.get("ok"):
             log(label, f"WARNING: resume failed: {r}")
 
+    # A thread can briefly show 'ready' between two consecutive tool calls
+    # within what's really one continuous work session — confirmed live
+    # (DeckForge's turn was ended and its live instance nearly evicted after
+    # a single such blip). Require the SAME idle status on back-to-back
+    # polls before treating the turn as actually finished.
     deadline = time.time() + turn_seconds
+    idle_streak = 0
     while time.time() < deadline:
         time.sleep(poll_seconds)
         solved = fetch_solved_map(kind, container, account)
@@ -173,8 +179,13 @@ def run_turn(entry, target_flag_args, t3_manage, instance, model, account,
             break
         st = thread_status(t3_manage, thread_id)
         if st not in ("running", "starting"):
-            log(label, f"thread went '{st}' on its own — ending turn early.")
-            break
+            idle_streak += 1
+            log(label, f"thread is '{st}' (idle check {idle_streak}/2)")
+            if idle_streak >= 2:
+                log(label, f"thread stayed '{st}' across two checks — ending turn early.")
+                break
+        else:
+            idle_streak = 0
     else:
         log(label, "turn budget elapsed.")
 
