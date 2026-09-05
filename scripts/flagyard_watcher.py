@@ -93,11 +93,8 @@ def slugify(text: str) -> str:
 def build_solver_prompt(target_flag: str, detail: dict) -> str:
     cid = challenge_field(detail, "id")
     title = challenge_field(detail, "title", "name")
-    category = challenge_field(
-        detail, "category", "categoryName",
-        default=(detail.get("challengeCategory") or {}).get("name", "Unknown"),
-    )
-    points = challenge_field(detail, "points", "score")
+    category = lib.category_name(detail)
+    points = lib.challenge_points(detail)
     desc = lib.strip_html(detail.get("description") or detail.get("content") or "")
     slug = slugify(str(title)) or str(cid)
 
@@ -115,7 +112,7 @@ DESCRIPTION:
     if files:
         prompt += f"ATTACHMENT(S): this challenge has downloadable file(s).\nDownload with: {dl_cmd}\n\n"
 
-    if any(k in detail for k in ("hasInstance", "isDynamic", "instance", "isContainer")):
+    if detail.get("internalPort") is not None:
         start_cmd = f"python3 {FLAGYARD_SCRIPTS}/instance.py {target_flag} --challenge-id {cid} --action start"
         status_cmd = f"python3 {FLAGYARD_SCRIPTS}/instance.py {target_flag} --challenge-id {cid} --action status"
         prompt += (
@@ -142,10 +139,7 @@ DESCRIPTION:
 def spawn_thread(kind, container, detail, project, instance, model, t3_manage, dry_run=False):
     cid = challenge_field(detail, "id")
     title = challenge_field(detail, "title", "name")
-    category = challenge_field(
-        detail, "category", "categoryName",
-        default=(detail.get("challengeCategory") or {}).get("name", "Unknown"),
-    )
+    category = lib.category_name(detail)
     label = slugify(f"{category}-{title}")[:40]
     thread_title = f"{category} - {title}"
     target_flag = f"--event-id {container}" if kind == "events" else f"--lab-id {container}"
@@ -203,8 +197,8 @@ def poll_once(kind, container, token, project, instance, model, t3_manage, seen,
         for c in new_challenges:
             cid = str(challenge_field(c, "id"))
             title = challenge_field(c, "title", "name")
-            cat = challenge_field(c, "category", "categoryName")
-            pts = challenge_field(c, "points", "score")
+            cat = lib.category_name(c)
+            pts = lib.challenge_points(c)
             log(f"  NEW: #{cid} [{cat}] {title} ({pts}pts)")
             try:
                 detail_path = f"{lib.container_path(kind, container)}/challenges/{cid}"

@@ -73,6 +73,45 @@ with no undo**. Confirm the project/model/expected challenge count with the
 user before a long unattended run, especially before `--once` against a big
 event (same caution the `t3-manage` skill itself calls out for batch spawns).
 
+## Instance-based challenges: one slot per FlagYard account
+
+FlagYard allows only **one running dynamic instance per account** — if
+multiple solver threads on the same account work instance-based (networked)
+challenges in parallel, whichever calls `instance.py --action start` most
+recently silently kills every other thread's instance out from under it
+(confirmed live during BlackHat MEA CTF 2026).
+
+`scripts/instance_queue.py` handles this: point it at one FlagYard account
+(see flagyard-submit's multi-account support, `auth.py --account`) and a list
+of already-spawned solver threads, and it round-robins them through that
+account's single instance slot — only the active entry's thread is resumed,
+every other one stays interrupted so it can't race for the slot. Each turn
+runs until the challenge is solved or a time budget elapses, then the
+instance is stopped and the next entry becomes active.
+
+Run **one instance of this script per account** to get one concurrent
+instance-slot per account — e.g. three team members' accounts means three
+instance-based challenges can genuinely run at once instead of fighting over
+one slot:
+
+```bash
+python3 scripts/instance_queue.py --event-id <uuid> --account teammateA \
+  --entry "ChallengeA:<threadId>:<challengeId>" \
+  --entry "ChallengeB:<threadId>:<challengeId>" \
+  --active ChallengeA --turn-minutes 20
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--event-id` / `--lab-id` | — | Target |
+| `--account` | (default account) | Which FlagYard account's instance slot to manage |
+| `--entry` | — | `label:thread_id:challenge_id`, repeatable |
+| `--active` | — | Label that already holds the instance slot right now (skips the initial resume-message) |
+| `--turn-minutes` | 20 | Max time before rotating to the next entry |
+| `--poll-seconds` | 30 | How often to check solved-status / thread status during a turn |
+| `--instance` / `--model` | `cursor` / `claude-opus-4-6[effort=high]` | Model used when resuming a thread |
+| `--state-file` | `./instance_queue_state.json` | Persists queue position + solved set (resumable) |
+
 ## Install
 
 ```bash
